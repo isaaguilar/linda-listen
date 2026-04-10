@@ -11,7 +11,7 @@ mod transcription;
 
 use crate::{
     capture::CaptureSession,
-    clipboard::{copy_text, paste_clipboard_on_main_thread},
+    clipboard::{copy_text, type_text_on_main_thread},
     config::{normalize_shortcut, AppConfig, ConfigStore},
     error::{AppError, AppResult},
     gemini::GeminiProvider,
@@ -66,7 +66,7 @@ impl AppRuntime {
     pub fn load() -> AppResult<Self> {
         let (store, config) = ConfigStore::load()?;
         let client = Client::builder()
-            .user_agent("linda-listen/0.1.0")
+            .user_agent("linda-listen/0.2.0")
             .build()?;
         let model_manager = ParakeetModelManager::load()?;
         let history = HistoryStore::new(store.config_dir())?;
@@ -418,18 +418,21 @@ impl AppRuntime {
             let mut runtime = self.runtime.lock().unwrap();
             runtime.last_output = Some(final_text.clone());
         }
-        self.mark_status(app, AppStatus::Copying, "Copying text to clipboard");
-
-        if let Err(err) = copy_text(&final_text) {
-            self.mark_error(app, err.to_string());
-            return Err(err);
-        }
 
         let mut pasted = false;
         let mut paste_skipped = false;
         let mut paste_error: Option<String> = None;
+        let mut clipboard_updated = false;
+
         if config.auto_paste {
             if main_window_is_focused(app) {
+                // Window is focused — copy to clipboard for manual paste instead.
+                self.mark_status(app, AppStatus::Copying, "Copying text to clipboard");
+                if let Err(err) = copy_text(&final_text) {
+                    self.mark_error(app, err.to_string());
+                    return Err(err);
+                }
+                clipboard_updated = true;
                 paste_skipped = true;
                 self.mark_status(
                     app,
@@ -437,25 +440,38 @@ impl AppRuntime {
                     "Copied the transcript to the clipboard; paste skipped while the app is open",
                 );
             } else {
-                self.mark_status(app, AppStatus::Pasting, "Pasting into the active app");
-                if let Err(err) = paste_clipboard_on_main_thread(app).await {
+                // Type text directly into the frontmost app without touching the clipboard.
+                self.mark_status(app, AppStatus::Pasting, "Typing into the active app");
+                if let Err(err) = type_text_on_main_thread(app, final_text.clone()).await {
+                    // Fall back to clipboard so the transcript is not lost.
+                    if copy_text(&final_text).is_ok() {
+                        clipboard_updated = true;
+                    }
                     let message = format!(
-                        "Copied the transcript to the clipboard; auto-paste failed: {}. On macOS, grant Accessibility permission to Linda Listen and allow it to control System Events if prompted.",
+                        "Auto-type failed, copied to clipboard instead: {}. On macOS, grant Accessibility permission to Linda Listen and allow it to control System Events if prompted.",
                         err
                     );
-                    eprintln!("auto-paste failed: {err}");
+                    eprintln!("auto-type failed: {err}");
                     paste_error = Some(message);
                 } else {
                     pasted = true;
                 }
             }
+        } else {
+            // Auto-paste disabled — just copy to clipboard.
+            self.mark_status(app, AppStatus::Copying, "Copying text to clipboard");
+            if let Err(err) = copy_text(&final_text) {
+                self.mark_error(app, err.to_string());
+                return Err(err);
+            }
+            clipboard_updated = true;
         }
 
         {
             let mut runtime = self.runtime.lock().unwrap();
             runtime.status = AppStatus::Ready;
             runtime.status_detail = if pasted {
-                "Copied and pasted the transcript".to_owned()
+                "Typed the transcript into the active app".to_owned()
             } else if let Some(message) = paste_error.clone() {
                 message
             } else if paste_skipped {
@@ -471,7 +487,7 @@ impl AppRuntime {
             raw_transcript: transcript,
             final_text,
             used_gemini,
-            clipboard_updated: true,
+            clipboard_updated,
             pasted,
         })
     }
