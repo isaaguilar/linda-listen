@@ -26,5 +26,7 @@ npm run tauri build
 ## Notes
 
 - Local transcription uses the bundled local speech model pipeline.
+- Import audio files from the Capture panel for local transcription. WAV, MP3, M4A/AAC, FLAC, and OGG/Opus are supported, with a 250 MB or 30 minute limit.
+- Imported audio is decoded and transcribed locally and is never uploaded or copied into history. Only the resulting transcript is stored.
 - Gemini cleanup is optional and off by default.
 - The prototype stores the API key in the macOS Keychain when available.

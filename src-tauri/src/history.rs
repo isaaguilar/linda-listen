@@ -190,6 +190,30 @@ mod tests {
     }
 
     #[test]
+    fn transcript_only_entry_does_not_write_audio() {
+        let (_tmp, store) = make_store();
+
+        store
+            .save_entry("imported transcript", None, None, None)
+            .unwrap();
+
+        let files: Vec<_> = store
+            .dir()
+            .read_dir()
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0]
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str()),
+            Some("txt")
+        );
+    }
+
+    #[test]
     fn save_with_audio_and_gemini() {
         let (_tmp, store) = make_store();
         let audio = dummy_audio();

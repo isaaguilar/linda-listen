@@ -1,4 +1,5 @@
 mod capture;
+mod audio_file;
 mod clipboard;
 mod config;
 mod history;
@@ -10,6 +11,7 @@ mod tray;
 mod transcription;
 
 use crate::{
+    audio_file::decode_audio_file,
     capture::CaptureSession,
     clipboard::{copy_text, type_text_on_main_thread},
     config::{normalize_shortcut, AppConfig, ConfigStore},
@@ -42,6 +44,7 @@ pub struct AppRuntime {
 
 struct RuntimeState {
     capture: Option<CaptureSession>,
+    operation_active: bool,
     status: AppStatus,
     status_detail: String,
     last_transcript: Option<String>,
@@ -53,6 +56,7 @@ impl Default for RuntimeState {
     fn default() -> Self {
         Self {
             capture: None,
+            operation_active: false,
             status: AppStatus::Idle,
             status_detail: "Ready to record".to_owned(),
             last_transcript: None,
@@ -66,7 +70,7 @@ impl AppRuntime {
     pub fn load() -> AppResult<Self> {
         let (store, config) = ConfigStore::load()?;
         let client = Client::builder()
-            .user_agent("linda-listen/0.2.0")
+            .user_agent("linda-listen/0.3.0")
             .build()?;
         let model_manager = ParakeetModelManager::load()?;
         let history = HistoryStore::new(store.config_dir())?;
@@ -229,7 +233,7 @@ impl AppRuntime {
 
     pub fn begin_capture(&self, app: &AppHandle) -> AppResult<()> {
         let runtime = self.runtime.lock().unwrap();
-        if runtime.capture.is_some() {
+        if runtime.capture.is_some() || runtime.operation_active {
             let err = AppError::Message("capture is already active".to_owned());
             drop(runtime);
             self.mark_error(app, err.to_string());
@@ -263,9 +267,32 @@ impl AppRuntime {
     ) -> AppResult<ProcessOutcome> {
         let capture = {
             let mut runtime = self.runtime.lock().unwrap();
+            if runtime.operation_active {
+                let err = AppError::Message("another audio operation is already active".to_owned());
+                drop(runtime);
+                self.mark_error(app, err.to_string());
+                return Err(err);
+            }
+            runtime.operation_active = true;
             runtime.capture.take()
         }
-        .ok_or_else(|| AppError::Message("no active capture session".to_owned()))?;
+        .ok_or_else(|| {
+            let err = AppError::Message("no active capture session".to_owned());
+            self.runtime.lock().unwrap().operation_active = false;
+            self.mark_error(app, err.to_string());
+            err
+        })?;
+
+        let result = self.finish_capture_and_process_inner(app, capture).await;
+        self.runtime.lock().unwrap().operation_active = false;
+        result
+    }
+
+    async fn finish_capture_and_process_inner(
+        &self,
+        app: &AppHandle,
+        capture: CaptureSession,
+    ) -> AppResult<ProcessOutcome> {
 
         let audio = match capture.finish() {
             Ok(audio) => audio,
@@ -338,6 +365,27 @@ impl AppRuntime {
         app: &AppHandle,
         text: String,
     ) -> AppResult<ProcessOutcome> {
+        {
+            let mut runtime = self.runtime.lock().unwrap();
+            if runtime.capture.is_some() || runtime.operation_active {
+                let err = AppError::Message("another audio operation is already active".to_owned());
+                drop(runtime);
+                self.mark_error(app, err.to_string());
+                return Err(err);
+            }
+            runtime.operation_active = true;
+        }
+
+        let result = self.process_text_inner(app, text).await;
+        self.runtime.lock().unwrap().operation_active = false;
+        result
+    }
+
+    async fn process_text_inner(
+        &self,
+        app: &AppHandle,
+        text: String,
+    ) -> AppResult<ProcessOutcome> {
         let outcome = self.process_transcript(app, text).await?;
 
         let model_name = if outcome.used_gemini {
@@ -356,6 +404,109 @@ impl AppRuntime {
             tray::reset_tray_idle(app, &self.tray_icons);
         }
 
+        Ok(outcome)
+    }
+
+    pub async fn import_audio(
+        &self,
+        app: &AppHandle,
+        path: String,
+    ) -> AppResult<ProcessOutcome> {
+        {
+            let mut runtime = self.runtime.lock().unwrap();
+            if runtime.capture.is_some() || runtime.operation_active {
+                let err = AppError::Message("another audio operation is already active".to_owned());
+                drop(runtime);
+                self.mark_error(app, err.to_string());
+                return Err(err);
+            }
+            runtime.operation_active = true;
+        }
+
+        let result = self.import_audio_inner(app, path).await;
+        self.runtime.lock().unwrap().operation_active = false;
+        result
+    }
+
+    async fn import_audio_inner(
+        &self,
+        app: &AppHandle,
+        path: String,
+    ) -> AppResult<ProcessOutcome> {
+        self.mark_status(
+            app,
+            AppStatus::Transcribing,
+            "Decoding and transcribing imported audio",
+        );
+        let audio = match tauri::async_runtime::spawn_blocking(move || {
+            decode_audio_file(std::path::Path::new(&path))
+        })
+        .await
+        {
+            Ok(result) => match result {
+                Ok(audio) => audio,
+                Err(err) => {
+                    self.mark_error(app, err.to_string());
+                    return Err(err);
+                }
+            },
+            Err(err) => {
+                let app_err = AppError::Message(format!("audio decoding task failed: {err}"));
+                self.mark_error(app, app_err.to_string());
+                return Err(app_err);
+            }
+        };
+
+        let model_dir = self.ensure_model_ready(app).await?;
+        self.mark_status(app, AppStatus::Transcribing, "Transcribing imported audio locally");
+        let transcript = match tauri::async_runtime::spawn_blocking({
+            let model_dir = model_dir.clone();
+            move || {
+                let mut transcriber = ParakeetTranscriber::new(model_dir)?;
+                transcriber.transcribe(&audio)
+            }
+        })
+        .await
+        {
+            Ok(result) => match result {
+                Ok(text) => text,
+                Err(err) => {
+                    self.mark_error(app, err.to_string());
+                    return Err(err);
+                }
+            },
+            Err(err) => {
+                let app_err = AppError::Message(format!("transcription task failed: {err}"));
+                self.mark_error(app, app_err.to_string());
+                return Err(app_err);
+            }
+        };
+
+        {
+            let mut runtime = self.runtime.lock().unwrap();
+            runtime.last_transcript = Some(transcript.clone());
+        }
+        self.emit_snapshot(app);
+        let outcome = self.process_transcript(app, transcript).await?;
+
+        let model_name = if outcome.used_gemini {
+            Some(self.current_config().gemini_model.clone())
+        } else {
+            None
+        };
+        if let Err(err) = self.history.save_entry(
+            &outcome.raw_transcript,
+            if outcome.used_gemini { Some(&outcome.final_text) } else { None },
+            model_name.as_deref(),
+            None,
+        ) {
+            self.mark_error(app, err.to_string());
+            return Err(err);
+        }
+
+        if outcome.pasted {
+            tray::reset_tray_idle(app, &self.tray_icons);
+        }
         Ok(outcome)
     }
 
@@ -625,6 +776,18 @@ async fn process_text(
         .map_err(|err| err.to_string())
 }
 
+#[tauri::command]
+async fn import_audio(
+    app: AppHandle,
+    state: State<'_, AppRuntime>,
+    path: String,
+) -> Result<ProcessOutcome, String> {
+    state
+        .import_audio(&app, path)
+        .await
+        .map_err(|err| err.to_string())
+}
+
 #[derive(serde::Serialize, Clone)]
 struct HistoryEntryInfo {
     timestamp: String,
@@ -664,6 +827,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let runtime = AppRuntime::load()?;
             let shortcut = runtime.snapshot().config.shortcut.clone();
@@ -736,6 +900,7 @@ pub fn run() {
             start_capture,
             stop_capture,
             process_text,
+            import_audio,
             list_history,
             open_history_folder
         ])

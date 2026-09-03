@@ -35,8 +35,10 @@
           <div class="button-row">
             <button id="start-capture" type="button">Start capture</button>
             <button id="stop-capture" type="button" class="secondary">Stop and process</button>
+            <button id="import-audio" type="button" class="secondary">Import audio file</button>
           </div>
         </div>
+        <p class="field-note import-note">Supported formats: WAV, MP3, M4A/AAC, FLAC, and OGG/Opus. Files are processed locally and limited to 250 MB or 30 minutes.</p>
 
         <label class="field">
           <span>Manual transcript</span>
@@ -119,7 +121,7 @@
         <div class="panel-head">
           <div>
             <h2>History</h2>
-            <p>The last five transcripts are kept alongside their audio recordings.</p>
+            <p>The last five transcripts are kept. Microphone recordings are retained for replay; imported source audio is never copied into history.</p>
           </div>
           <div class="button-row">
             <button id="open-history" type="button" class="secondary">Open folder</button>

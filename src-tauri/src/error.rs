@@ -36,6 +36,14 @@ pub enum AppError {
     CpalPlayStream(#[from] cpal::PlayStreamError),
     #[error("audio encoding error: {0}")]
     AudioEncoding(#[from] hound::Error),
+    #[error("audio file exceeds the {max_bytes} byte limit")]
+    AudioFileTooLarge { max_bytes: u64 },
+    #[error("audio file exceeds the {max_seconds} second duration limit")]
+    AudioFileTooLong { max_seconds: u64 },
+    #[error("unsupported audio format: {0}")]
+    UnsupportedAudioFormat(String),
+    #[error("audio decoding error: {0}")]
+    AudioDecoding(String),
     #[error("{0}")]
     Message(String),
 }

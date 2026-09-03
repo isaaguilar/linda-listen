@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 type AppStatus =
   | "idle"
@@ -96,6 +97,7 @@ const elements = {
   startCapture: document.querySelector<HTMLButtonElement>("#start-capture"),
   stopCapture: document.querySelector<HTMLButtonElement>("#stop-capture"),
   processText: document.querySelector<HTMLButtonElement>("#process-text"),
+  importAudio: document.querySelector<HTMLButtonElement>("#import-audio"),
   historyList: document.querySelector<HTMLDivElement>("#history-list"),
   openHistory: document.querySelector<HTMLButtonElement>("#open-history"),
 } as const;
@@ -254,6 +256,7 @@ function setButtonsDisabled(disabled: boolean) {
   requireElement(elements.startCapture, "#start-capture").disabled = disabled;
   requireElement(elements.stopCapture, "#stop-capture").disabled = disabled;
   requireElement(elements.processText, "#process-text").disabled = disabled;
+  requireElement(elements.importAudio, "#import-audio").disabled = disabled;
 }
 
 async function refreshSnapshot() {
@@ -301,11 +304,33 @@ async function processManualText() {
   await refreshHistory();
 }
 
+async function importAudio() {
+  const selected = await open({
+    multiple: false,
+    directory: false,
+    filters: [
+      {
+        name: "Audio files",
+        extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus"],
+      },
+    ],
+  });
+  if (typeof selected !== "string") {
+    return;
+  }
+
+  const outcome = await invoke<ProcessOutcome>("import_audio", { path: selected });
+  renderOutcome(outcome);
+  await refreshSnapshot();
+  await refreshHistory();
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   requireElement(elements.brandMark, "#brand-mark").src = brandMarkUrl;
   const startButton = requireElement(elements.startCapture, "#start-capture");
   const stopButton = requireElement(elements.stopCapture, "#stop-capture");
   const processButton = requireElement(elements.processText, "#process-text");
+  const importButton = requireElement(elements.importAudio, "#import-audio");
   const openHistoryButton = requireElement(elements.openHistory, "#open-history");
   const form = requireElement(elements.settingsForm, "#settings-form");
 
@@ -356,6 +381,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     setButtonsDisabled(true);
     try {
       await processManualText();
+    } catch (error) {
+      setTextContent(elements.lastError, String(error));
+      await refreshSnapshot();
+    } finally {
+      setButtonsDisabled(false);
+    }
+  });
+
+  importButton.addEventListener("click", async () => {
+    setButtonsDisabled(true);
+    try {
+      await importAudio();
     } catch (error) {
       setTextContent(elements.lastError, String(error));
       await refreshSnapshot();
