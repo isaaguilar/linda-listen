@@ -108,7 +108,10 @@ impl ConfigStore {
             AppConfig::default()
         };
 
-        let store = Self { config_path, keyring };
+        let store = Self {
+            config_path,
+            keyring,
+        };
         store.save_config(&config)?;
 
         Ok((store, config))

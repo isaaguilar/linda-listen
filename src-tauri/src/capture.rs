@@ -32,24 +32,15 @@ impl CaptureSession {
         let error_slot = Arc::new(Mutex::new(None));
 
         let stream = match supported_config.sample_format() {
-            SampleFormat::F32 => build_stream::<f32>(
-                &device,
-                &stream_config,
-                samples.clone(),
-                error_slot.clone(),
-            )?,
-            SampleFormat::I16 => build_stream::<i16>(
-                &device,
-                &stream_config,
-                samples.clone(),
-                error_slot.clone(),
-            )?,
-            SampleFormat::U16 => build_stream::<u16>(
-                &device,
-                &stream_config,
-                samples.clone(),
-                error_slot.clone(),
-            )?,
+            SampleFormat::F32 => {
+                build_stream::<f32>(&device, &stream_config, samples.clone(), error_slot.clone())?
+            }
+            SampleFormat::I16 => {
+                build_stream::<i16>(&device, &stream_config, samples.clone(), error_slot.clone())?
+            }
+            SampleFormat::U16 => {
+                build_stream::<u16>(&device, &stream_config, samples.clone(), error_slot.clone())?
+            }
             other => {
                 return Err(AppError::AudioCapture(format!(
                     "unsupported input sample format: {other:?}"

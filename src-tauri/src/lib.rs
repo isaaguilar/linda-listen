@@ -1,14 +1,14 @@
-mod capture;
 mod audio_file;
+mod capture;
 mod clipboard;
 mod config;
-mod history;
-mod model;
 mod error;
 mod gemini;
+mod history;
+mod model;
 mod state;
-mod tray;
 mod transcription;
+mod tray;
 
 use crate::{
     audio_file::decode_audio_file,
@@ -20,13 +20,13 @@ use crate::{
     history::HistoryStore,
     model::ParakeetModelManager,
     state::{AppSnapshot, AppStatus, ProcessOutcome, SettingsInput},
-    tray::TrayIcons,
     transcription::ParakeetTranscriber,
+    tray::TrayIcons,
 };
 use reqwest::Client;
 use std::sync::{Mutex, RwLock};
-use tauri::{AppHandle, Emitter, Manager, State};
 use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const FALLBACK_SHORTCUT: &str = "F18";
@@ -70,7 +70,7 @@ impl AppRuntime {
     pub fn load() -> AppResult<Self> {
         let (store, config) = ConfigStore::load()?;
         let client = Client::builder()
-            .user_agent("linda-listen/0.3.0")
+            .user_agent(concat!("linda-listen/", env!("CARGO_PKG_VERSION")))
             .build()?;
         let model_manager = ParakeetModelManager::load()?;
         let history = HistoryStore::new(store.config_dir())?;
@@ -97,7 +97,11 @@ impl AppRuntime {
             status_detail: runtime.status_detail.clone(),
             capture_active: runtime.capture.is_some(),
             config,
-            api_key_present: self.store.read_api_key().map(|key| key.is_some()).unwrap_or(false),
+            api_key_present: self
+                .store
+                .read_api_key()
+                .map(|key| key.is_some())
+                .unwrap_or(false),
             last_transcript: runtime.last_transcript.clone(),
             last_output: runtime.last_output.clone(),
             last_error: runtime.last_error.clone(),
@@ -163,7 +167,10 @@ impl AppRuntime {
         self.mark_status(
             app,
             AppStatus::Downloading,
-            format!("Downloading local speech model into {}", model_dir.display()),
+            format!(
+                "Downloading local speech model into {}",
+                model_dir.display()
+            ),
         );
 
         match self.model_manager.ensure_ready(&self.client, &config).await {
@@ -182,11 +189,7 @@ impl AppRuntime {
         }
     }
 
-    pub fn save_settings(
-        &self,
-        app: &AppHandle,
-        input: SettingsInput,
-    ) -> AppResult<AppSnapshot> {
+    pub fn save_settings(&self, app: &AppHandle, input: SettingsInput) -> AppResult<AppSnapshot> {
         let mut config = self.current_config();
         let old_shortcut = config.shortcut.clone();
 
@@ -204,7 +207,12 @@ impl AppRuntime {
         }
         config.auto_paste = input.auto_paste;
 
-        if let Some(api_key) = input.api_key.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(api_key) = input
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             if let Err(err) = self.store.set_api_key(Some(api_key)) {
                 self.mark_error(app, err.to_string());
                 return Err(err);
@@ -261,10 +269,7 @@ impl AppRuntime {
         Ok(())
     }
 
-    pub async fn finish_capture_and_process(
-        &self,
-        app: &AppHandle,
-    ) -> AppResult<ProcessOutcome> {
+    pub async fn finish_capture_and_process(&self, app: &AppHandle) -> AppResult<ProcessOutcome> {
         let capture = {
             let mut runtime = self.runtime.lock().unwrap();
             if runtime.operation_active {
@@ -293,7 +298,6 @@ impl AppRuntime {
         app: &AppHandle,
         capture: CaptureSession,
     ) -> AppResult<ProcessOutcome> {
-
         let audio = match capture.finish() {
             Ok(audio) => audio,
             Err(err) => {
@@ -301,11 +305,24 @@ impl AppRuntime {
                 return Err(err);
             }
         };
-        let audio_for_history = audio.clone();
+        let wav_path = match self.history.persist_audio(&audio) {
+            Ok(path) => path,
+            Err(err) => {
+                self.mark_error(app, err.to_string());
+                return Err(err);
+            }
+        };
 
         let model_dir = match self.ensure_model_ready(app).await {
             Ok(model_dir) => model_dir,
-            Err(err) => return Err(err),
+            Err(err) => {
+                eprintln!("[audio saved] raw recording persisted at {:?}", wav_path);
+                self.mark_error(
+                    app,
+                    format!("{err} (audio saved to {})", wav_path.display()),
+                );
+                return Err(err);
+            }
         };
 
         self.mark_status(app, AppStatus::Transcribing, "Transcribing local speech");
@@ -322,13 +339,21 @@ impl AppRuntime {
             Ok(result) => match result {
                 Ok(text) => text,
                 Err(err) => {
-                    self.mark_error(app, err.to_string());
+                    eprintln!("[audio saved] raw recording persisted at {:?}", wav_path);
+                    self.mark_error(
+                        app,
+                        format!("{err} (audio saved to {})", wav_path.display()),
+                    );
                     return Err(err);
                 }
             },
             Err(err) => {
                 let app_err = AppError::Message(format!("transcription task failed: {err}"));
-                self.mark_error(app, app_err.to_string());
+                eprintln!("[audio saved] raw recording persisted at {:?}", wav_path);
+                self.mark_error(
+                    app,
+                    format!("{app_err} (audio saved to {})", wav_path.display()),
+                );
                 return Err(app_err);
             }
         };
@@ -346,12 +371,20 @@ impl AppRuntime {
         } else {
             None
         };
-        let _ = self.history.save_entry(
+        if let Err(err) = self.history.save_entry(
             &outcome.raw_transcript,
-            if outcome.used_gemini { Some(&outcome.final_text) } else { None },
+            if outcome.used_gemini {
+                Some(&outcome.final_text)
+            } else {
+                None
+            },
             model_name.as_deref(),
-            Some(&audio_for_history),
-        );
+            None,
+            Some(&wav_path),
+        ) {
+            self.mark_error(app, err.to_string());
+            return Err(err);
+        }
 
         if outcome.pasted {
             tray::reset_tray_idle(app, &self.tray_icons);
@@ -360,11 +393,7 @@ impl AppRuntime {
         Ok(outcome)
     }
 
-    pub async fn process_text(
-        &self,
-        app: &AppHandle,
-        text: String,
-    ) -> AppResult<ProcessOutcome> {
+    pub async fn process_text(&self, app: &AppHandle, text: String) -> AppResult<ProcessOutcome> {
         {
             let mut runtime = self.runtime.lock().unwrap();
             if runtime.capture.is_some() || runtime.operation_active {
@@ -381,11 +410,7 @@ impl AppRuntime {
         result
     }
 
-    async fn process_text_inner(
-        &self,
-        app: &AppHandle,
-        text: String,
-    ) -> AppResult<ProcessOutcome> {
+    async fn process_text_inner(&self, app: &AppHandle, text: String) -> AppResult<ProcessOutcome> {
         let outcome = self.process_transcript(app, text).await?;
 
         let model_name = if outcome.used_gemini {
@@ -395,8 +420,13 @@ impl AppRuntime {
         };
         let _ = self.history.save_entry(
             &outcome.raw_transcript,
-            if outcome.used_gemini { Some(&outcome.final_text) } else { None },
+            if outcome.used_gemini {
+                Some(&outcome.final_text)
+            } else {
+                None
+            },
             model_name.as_deref(),
+            None,
             None,
         );
 
@@ -407,11 +437,7 @@ impl AppRuntime {
         Ok(outcome)
     }
 
-    pub async fn import_audio(
-        &self,
-        app: &AppHandle,
-        path: String,
-    ) -> AppResult<ProcessOutcome> {
+    pub async fn import_audio(&self, app: &AppHandle, path: String) -> AppResult<ProcessOutcome> {
         {
             let mut runtime = self.runtime.lock().unwrap();
             if runtime.capture.is_some() || runtime.operation_active {
@@ -428,11 +454,7 @@ impl AppRuntime {
         result
     }
 
-    async fn import_audio_inner(
-        &self,
-        app: &AppHandle,
-        path: String,
-    ) -> AppResult<ProcessOutcome> {
+    async fn import_audio_inner(&self, app: &AppHandle, path: String) -> AppResult<ProcessOutcome> {
         self.mark_status(
             app,
             AppStatus::Transcribing,
@@ -458,7 +480,11 @@ impl AppRuntime {
         };
 
         let model_dir = self.ensure_model_ready(app).await?;
-        self.mark_status(app, AppStatus::Transcribing, "Transcribing imported audio locally");
+        self.mark_status(
+            app,
+            AppStatus::Transcribing,
+            "Transcribing imported audio locally",
+        );
         let transcript = match tauri::async_runtime::spawn_blocking({
             let model_dir = model_dir.clone();
             move || {
@@ -496,8 +522,13 @@ impl AppRuntime {
         };
         if let Err(err) = self.history.save_entry(
             &outcome.raw_transcript,
-            if outcome.used_gemini { Some(&outcome.final_text) } else { None },
+            if outcome.used_gemini {
+                Some(&outcome.final_text)
+            } else {
+                None
+            },
             model_name.as_deref(),
+            None,
             None,
         ) {
             self.mark_error(app, err.to_string());
@@ -626,7 +657,8 @@ impl AppRuntime {
             } else if let Some(message) = paste_error.clone() {
                 message
             } else if paste_skipped {
-                "Copied the transcript to the clipboard; paste skipped while the app is open".to_owned()
+                "Copied the transcript to the clipboard; paste skipped while the app is open"
+                    .to_owned()
             } else {
                 "Copied the transcript to the clipboard".to_owned()
             };
@@ -742,7 +774,9 @@ async fn save_settings(
     state: State<'_, AppRuntime>,
     input: SettingsInput,
 ) -> Result<AppSnapshot, String> {
-    state.save_settings(&app, input).map_err(|err| err.to_string())
+    state
+        .save_settings(&app, input)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -845,20 +879,22 @@ pub fn run() {
 
             // --- System tray ---
             let show_item = tauri::menu::MenuItem::with_id(
-                app, "show_window", "Show Window", true, None::<&str>,
+                app,
+                "show_window",
+                "Show Window",
+                true,
+                None::<&str>,
             )?;
-            let quit_item = tauri::menu::MenuItem::with_id(
-                app, "quit", "Quit", true, None::<&str>,
-            )?;
+            let quit_item =
+                tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = tauri::menu::MenuBuilder::new(app)
                 .item(&show_item)
                 .separator()
                 .item(&quit_item)
                 .build()?;
 
-            let tray_icon_image = tauri::image::Image::from_bytes(
-                include_bytes!("../icons/tray-icon.png"),
-            )?;
+            let tray_icon_image =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
             TrayIconBuilder::with_id(tray::TRAY_ID)
                 .icon(tray_icon_image)

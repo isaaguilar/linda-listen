@@ -45,12 +45,7 @@ impl ParakeetTranscriber {
         let samples = audio.to_parakeet_samples()?;
         let result = self
             .model
-            .transcribe_samples(
-                samples,
-                16_000,
-                1,
-                Some(TimestampMode::Sentences),
-            )
+            .transcribe_samples(samples, 16_000, 1, Some(TimestampMode::Sentences))
             .map_err(|err| AppError::Transcription(err.to_string()))?;
 
         let transcript = result.text.trim().to_owned();
@@ -65,7 +60,9 @@ impl ParakeetTranscriber {
 }
 
 fn normalize_audio(samples: &[f32]) -> Vec<f32> {
-    let peak = samples.iter().fold(0.0f32, |max, sample| max.max(sample.abs()));
+    let peak = samples
+        .iter()
+        .fold(0.0f32, |max, sample| max.max(sample.abs()));
     if peak <= 1e-6 {
         return samples.to_vec();
     }
@@ -114,7 +111,8 @@ fn resample_linear(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f
     let mut output = Vec::with_capacity(target_len);
 
     for index in 0..target_len {
-        let position = index as f64 * last_index as f64 / (target_len.saturating_sub(1).max(1) as f64);
+        let position =
+            index as f64 * last_index as f64 / (target_len.saturating_sub(1).max(1) as f64);
         let left = position.floor() as usize;
         let right = left.min(last_index);
         let next = (right + 1).min(last_index);

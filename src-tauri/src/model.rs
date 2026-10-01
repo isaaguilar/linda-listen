@@ -4,9 +4,7 @@ use crate::{
 };
 use directories::ProjectDirs;
 use reqwest::Client;
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 
 const MODEL_CACHE_DIR: &str = "parakeet-tdt-0.6b-v3-int8";

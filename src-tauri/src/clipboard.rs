@@ -11,8 +11,8 @@ pub fn copy_text(text: &str) -> AppResult<()> {
 
 #[allow(dead_code)]
 fn paste_clipboard_impl() -> AppResult<()> {
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|err| AppError::Automation(err.to_string()))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|err| AppError::Automation(err.to_string()))?;
     enigo
         .key(Key::Meta, Direction::Press)
         .map_err(|err| AppError::Automation(err.to_string()))?;
@@ -55,7 +55,9 @@ fn paste_clipboard_with_osascript() -> AppResult<()> {
         format!("exit status {}", output.status)
     };
 
-    Err(AppError::Automation(format!("AppleScript paste failed: {detail}")))
+    Err(AppError::Automation(format!(
+        "AppleScript paste failed: {detail}"
+    )))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -82,7 +84,9 @@ pub async fn paste_clipboard_on_main_thread(app: &AppHandle) -> AppResult<()> {
         .map_err(|_| AppError::Message("failed to receive paste result".to_owned()))?
     {
         Ok(()) => Ok(()),
-        Err(message) if is_simulate_input_permission_error(&message) => paste_clipboard_with_osascript(),
+        Err(message) if is_simulate_input_permission_error(&message) => {
+            paste_clipboard_with_osascript()
+        }
         Err(message) => Err(AppError::Message(message)),
     }
 }
@@ -90,8 +94,8 @@ pub async fn paste_clipboard_on_main_thread(app: &AppHandle) -> AppResult<()> {
 /// Inject text directly into the frontmost app using CGEvent-based keyboard
 /// events. This never touches the system clipboard.
 fn type_text_impl(text: &str) -> AppResult<()> {
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|err| AppError::Automation(err.to_string()))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|err| AppError::Automation(err.to_string()))?;
     enigo
         .text(text)
         .map_err(|err| AppError::Automation(err.to_string()))?;
@@ -115,9 +119,7 @@ fn type_text_with_osascript(text: &str) -> AppResult<()> {
     }
     let body = parts.join("\n");
     let script = format!("tell application \"System Events\"\n{body}\nend tell");
-    let output = Command::new("osascript")
-        .args(["-e", &script])
-        .output()?;
+    let output = Command::new("osascript").args(["-e", &script]).output()?;
 
     if output.status.success() {
         return Ok(());
@@ -133,7 +135,9 @@ fn type_text_with_osascript(text: &str) -> AppResult<()> {
         format!("exit status {}", output.status)
     };
 
-    Err(AppError::Automation(format!("AppleScript type text failed: {detail}")))
+    Err(AppError::Automation(format!(
+        "AppleScript type text failed: {detail}"
+    )))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -201,6 +205,9 @@ mod tests {
         let result = super::type_text_with_osascript("hello");
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("only available on macOS"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("only available on macOS"),
+            "unexpected error: {msg}"
+        );
     }
 }

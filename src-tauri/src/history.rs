@@ -25,18 +25,38 @@ impl HistoryStore {
         Ok(Self { dir })
     }
 
+    /// Persist audio to disk immediately, before transcription.
+    /// Returns the path to the written WAV file.
+    pub fn persist_audio(&self, audio: &CapturedAudio) -> AppResult<PathBuf> {
+        let ts = chrono_timestamp();
+        self.write_wav(&ts, audio)?;
+        Ok(self.dir.join(format!("entry-{ts}.wav")))
+    }
+
     /// Save a history entry (text + optional audio). Prunes to 5 entries afterward.
+    ///
+    /// If `prewritten_wav` is provided, the text file is written with the same
+    /// timestamp stem so it pairs with the already-persisted WAV. The WAV is
+    /// not re-written.
     pub fn save_entry(
         &self,
         raw_transcript: &str,
         final_text: Option<&str>,
         model_name: Option<&str>,
         audio: Option<&CapturedAudio>,
+        prewritten_wav: Option<&Path>,
     ) -> AppResult<()> {
-        let ts = chrono_timestamp();
-        self.write_text(&ts, raw_transcript, final_text, model_name)?;
-        if let Some(audio) = audio {
-            self.write_wav(&ts, audio)?;
+        if let Some(wav_path) = prewritten_wav {
+            // Extract timestamp from the pre-written WAV filename
+            let stem = wav_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let ts = stem.strip_prefix("entry-").unwrap_or(stem);
+            self.write_text(ts, raw_transcript, final_text, model_name)?;
+        } else {
+            let ts = chrono_timestamp();
+            self.write_text(&ts, raw_transcript, final_text, model_name)?;
+            if let Some(audio) = audio {
+                self.write_wav(&ts, audio)?;
+            }
         }
         self.prune()?;
         Ok(())
@@ -181,7 +201,7 @@ mod tests {
     fn save_and_list_entries() {
         let (_tmp, store) = make_store();
         store
-            .save_entry("hello world", None, None, None)
+            .save_entry("hello world", None, None, None, None)
             .unwrap();
         let entries = store.list_entries().unwrap();
         assert_eq!(entries.len(), 1);
@@ -194,7 +214,7 @@ mod tests {
         let (_tmp, store) = make_store();
 
         store
-            .save_entry("imported transcript", None, None, None)
+            .save_entry("imported transcript", None, None, None, None)
             .unwrap();
 
         let files: Vec<_> = store
@@ -223,6 +243,7 @@ mod tests {
                 Some("rewritten text"),
                 Some("gemini-2.5-flash"),
                 Some(&audio),
+                None,
             )
             .unwrap();
         let entries = store.list_entries().unwrap();
@@ -250,7 +271,7 @@ mod tests {
         let (_tmp, store) = make_store();
         for i in 0..7 {
             store
-                .save_entry(&format!("entry {i}"), None, None, None)
+                .save_entry(&format!("entry {i}"), None, None, None, None)
                 .unwrap();
             // Small delay so timestamps differ
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -259,5 +280,33 @@ mod tests {
         assert_eq!(entries.len(), 5);
         // Newest entry should be "entry 6"
         assert!(entries[0].preview.contains("entry 6"));
+    }
+
+    #[test]
+    fn persist_audio_then_save_entry_reuses_wav_timestamp() {
+        let (_tmp, store) = make_store();
+        let audio = dummy_audio();
+        let wav_path = store.persist_audio(&audio).unwrap();
+
+        store
+            .save_entry("raw text", None, None, None, Some(&wav_path))
+            .unwrap();
+
+        let txt_path = wav_path.with_extension("txt");
+        assert!(wav_path.exists());
+        assert!(txt_path.exists());
+        assert_eq!(
+            fs::read_to_string(txt_path).unwrap().contains("raw text"),
+            true
+        );
+        assert_eq!(
+            store
+                .dir()
+                .read_dir()
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .count(),
+            2
+        );
     }
 }

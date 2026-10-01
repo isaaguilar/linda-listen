@@ -2,17 +2,14 @@ use crate::{
     capture::CapturedAudio,
     error::{AppError, AppResult},
 };
-use std::{
-    fs::File,
-    path::Path,
-};
+use std::{fs::File, path::Path};
 use symphonia::core::{
     audio::GenericAudioBufferRef,
     codecs::audio::{AudioDecoderOptions, CODEC_ID_NULL_AUDIO},
     codecs::registry::CodecRegistry,
     errors::Error as SymphoniaError,
-    formats::FormatOptions,
     formats::probe::{Hint, Probe},
+    formats::FormatOptions,
     io::MediaSourceStream,
     meta::MetadataOptions,
 };
@@ -232,9 +229,7 @@ fn validate_duration(frame_count: u64, sample_rate: u32) -> AppResult<()> {
 }
 
 fn unsupported_format(detail: String) -> AppError {
-    AppError::UnsupportedAudioFormat(format!(
-        "{detail}. Supported formats: {SUPPORTED_FORMATS}"
-    ))
+    AppError::UnsupportedAudioFormat(format!("{detail}. Supported formats: {SUPPORTED_FORMATS}"))
 }
 
 struct MonoResampler {
@@ -262,10 +257,10 @@ impl MonoResampler {
             let source_index = self.source_frames;
 
             if let Some(previous) = self.previous_sample {
-                while self.next_target_frame < MAX_AUDIO_DURATION_SECS * u64::from(TARGET_SAMPLE_RATE)
+                while self.next_target_frame
+                    < MAX_AUDIO_DURATION_SECS * u64::from(TARGET_SAMPLE_RATE)
                 {
-                    let position = self.next_target_frame as f64
-                        * f64::from(self.source_rate)
+                    let position = self.next_target_frame as f64 * f64::from(self.source_rate)
                         / f64::from(TARGET_SAMPLE_RATE);
                     if position > source_index as f64 {
                         break;
@@ -278,11 +273,12 @@ impl MonoResampler {
             }
 
             self.previous_sample = Some(mono);
-            self.source_frames = self.source_frames.checked_add(1).ok_or_else(|| {
-                AppError::AudioFileTooLong {
-                    max_seconds: MAX_AUDIO_DURATION_SECS,
-                }
-            })?;
+            self.source_frames =
+                self.source_frames
+                    .checked_add(1)
+                    .ok_or_else(|| AppError::AudioFileTooLong {
+                        max_seconds: MAX_AUDIO_DURATION_SECS,
+                    })?;
         }
 
         if self.source_frames > u64::from(self.source_rate) * MAX_AUDIO_DURATION_SECS {
@@ -330,11 +326,8 @@ mod tests {
 
     #[test]
     fn rejects_duration_over_the_centralized_limit() {
-        let error = validate_duration(
-            u64::from(16_000u32) * (MAX_AUDIO_DURATION_SECS + 1),
-            16_000,
-        )
-        .unwrap_err();
+        let error = validate_duration(u64::from(16_000u32) * (MAX_AUDIO_DURATION_SECS + 1), 16_000)
+            .unwrap_err();
 
         assert!(matches!(error, AppError::AudioFileTooLong { .. }));
     }
